@@ -1,0 +1,214 @@
+#packages
+
+install.packages("psych")
+library(openxlsx)
+library(Rtsne)
+library(tidyverse)
+library(DataCombine)
+library(cluster)
+library(ggplot2)
+library(sjstats)
+library(ClustOfVar)
+library(ggplot2)
+library(plyr)
+library(purrr)
+
+# 1.Read Data
+
+clust_Abbrecher<- read.xlsx("cluster_s1.xlsx", colNames = TRUE)
+str(clust_Abbrecher)
+
+clust_Abbrecher[  ,c(1,3,4,5,7,9)] <- lapply(clust_Abbrecher[  ,c(1,3,4,5,7,9)], as.factor) # Faktorisierung der nominalen Variablen
+
+# 2. extract Year of exmatriculation
+
+
+as.character(clust_Abbrecher$exmatrikulationssemester)
+clust_Abbrecher$exmatrikulationssemester<- substring(clust_Abbrecher$exmatrikulationssemester, 1,4)
+clust_Abbrecher$exmatrikulationssemester<-as.numeric(clust_Abbrecher$exmatrikulationssemester)
+str(clust_Abbrecher)
+
+# 3..Calculate Age 
+
+alter_bei_exma<- (clust_Abbrecher$exmatrikulationssemester) - (clust_Abbrecher$geburtsjahr)
+clust_Abbrecher<- cbind(clust_Abbrecher, alter_bei_exma)
+
+# Variablen Exmatrikulationssemester und Geburtsjahr entfernen
+clust_Abbrecher<-clust_Abbrecher[  ,-c(2,6)]
+
+
+# 4.Test for Outliers
+# 4.1. Visualiize Data
+
+plot(clust_Abbrecher[  ,c(3,5,6,8,10,11)]) 
+
+# 4.2 
+boxplot(clust_Abbrecher$hzb_note)
+boxplot(clust_Abbrecher$hochschulsemester_vor_akt_studium) # >= 25
+boxplot(clust_Abbrecher$alter_bei_exma) # >50 (# 766)
+
+
+subset(clust_Abbrecher, alter_bei_exma > 50) # 666
+subset(clust_Abbrecher, hochschulsemester_vor_akt_studium >= 20) # 123
+
+# 4.3 Remove Outliers
+clust_Abbrecher<- clust_Abbrecher[-c(666, 123),  ]
+str(clust_Abbrecher) # 910 VObservations
+clust_A<- clust_Abbrecher
+str(clust_A)
+head(clust_A)
+summary(clust_A)
+
+
+
+# 5. Account for missing data
+any(is.na(clust_A)) # False
+
+
+# 6. Distance Matrix
+
+gower_dist <- daisy(clust_A, metric = "gower", type = list() )
+summary(gower_dist)
+gower_mat <- as.matrix(gower_dist)
+
+
+gower_mat <- as.matrix(gower_dist)
+
+
+# 7. Calculate amount of clusters
+
+sil_width <- c(NA)
+for(i in 2:10){
+  pam_fit <- pam(gower_dist,
+                 diss = TRUE,
+                 k = i)
+  sil_width[i] <- pam_fit$silinfo$avg.width
+}
+
+# Plot sihouette width
+
+plot(1:10, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:10, sil_width)   # 3 or 4 clusters seem appropriate
+
+
+
+# 8. hierarchical Clustering
+## Determine which Clustering Algorithm to choose
+
+
+# Algorithm Vektor 
+m <- c( "average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+
+#Agglomerativ-Coefficient
+ac <- function(x) {
+  agnes(gower_dist, method = x)$ac
+}
+map_dbl(m, ac)      
+## average single complete ward
+## 0.9241325 0.9215283 0.9317012 0.9493598
+
+
+#Dendogramm with "Ward methode"
+
+hc_A<- agnes(gower_dist, method = "ward")
+as.dendrogram(hc_A)
+
+pltree(hc_A, cex = 0.6, hang = -1, main = "Cluster Abbrecher (ward)")
+
+
+# 8.1. c=3
+clusters_k3 <- cutree(hc_A, k =3)
+
+k3_abbrecher<- mutate(clust_A, cluster = clusters_k3)
+head(k3_abbrecher)
+count(k3_abbrecher, "cluster")
+freq_k3<-t(count(k3_abbrecher, "cluster"))
+freq_k3<-freq_k3[2,  ]
+freq_k3
+
+sum1_k3<-k3_abbrecher[  ,c(6,8:12)]%>%
+  group_by(k3_abbrecher$cluster) %>%
+  summarise_all(funs(mean(.)))
+
+head(sum1_k3)
+sum_k3<-t(sum1_k3)
+colnames(sum_k3)<- c("cluster 1", "cluster 2", "cluster 3")
+sum_k3
+
+crosstab1<-table(k3_abbrecher$geschlecht, k3_abbrecher$cluster)
+prob_g<- round(prop.table(crosstab1,2), digits = 2)
+prob_g
+
+crosstab2<-table(k3_abbrecher$hzb_art, k3_abbrecher$cluster)
+prob_hzb<- round(prop.table(crosstab2,2), digits = 2)
+prob_hzb
+
+crosstab3<-table(k3_abbrecher$berufsausbildung, k3_abbrecher$cluster)
+prob_beruf<- round(prop.table(crosstab3,2), digits = 2)
+prob_beruf
+
+crosstab4<-table(k3_abbrecher$exmatrikulationsgrund, k3_abbrecher$cluster)
+prob_grund<- round(prop.table(crosstab4,2), digits = 2)
+prob_grund
+
+crosstab5<-table(k3_abbrecher$fachbereich, k3_abbrecher$cluster)
+prob_fb<- round(prop.table(crosstab5,2), digits = 2)
+prob_fb
+
+sum_clust_k3<- round(rbind(freq_k3, sum_k3[2:7,  ],prob_g, prob_hzb, prob_beruf, prob_grund, prob_fb ), digits =2)
+sum_clust_k3
+
+# 8.2. c=4
+clusters_k4 <- cutree(hc_A, k =4)
+
+k4_abbrecher<- mutate(clust_A, cluster = clusters_k4)
+head(k4_abbrecher)
+count(k4_abbrecher, "cluster")
+freq_k4<-t(count(k4_abbrecher, "cluster"))
+freq_k4<-freq_k4[2,  ]
+
+sum1_k4<-k4_abbrecher[  ,c(6,8:12)]%>%
+  group_by(k4_abbrecher$cluster) %>%
+  summarise_all(funs(mean(.)))
+
+
+head(sum1_k4)
+sum_k4<-t(sum1_k4)
+colnames(sum_k4)<- c("cluster 1", "cluster 2", "cluster 3", "cluster 4")
+sum_k4
+
+crosstab1<-table(k4_abbrecher$geschlecht, k4_abbrecher$cluster)
+prob_g<- round(prop.table(crosstab1,2), digits = 2)
+prob_g
+
+crosstab2<-table(k4_abbrecher$hzb_art, k4_abbrecher$cluster)
+prob_hzb<- round(prop.table(crosstab2,2), digits = 2)
+prob_hzb
+
+crosstab3<-table(k4_abbrecher$berufsausbildung, k4_abbrecher$cluster)
+prob_beruf<- round(prop.table(crosstab3,2), digits = 2)
+prob_beruf
+
+crosstab4<-table(k4_abbrecher$exmatrikulationsgrund, k4_abbrecher$cluster)
+prob_grund<- round(prop.table(crosstab4,2), digits = 2)
+prob_grund
+
+crosstab5<-table(k4_abbrecher$fachbereich, k4_abbrecher$cluster)
+prob_fb<- round(prop.table(crosstab5,2), digits = 2)
+prob_fb
+
+sum_clust_k4<- round(rbind(freq_k4, sum_k4[2:7,  ],prob_g, prob_hzb, prob_beruf, prob_grund, prob_fb ), digits =2)
+sum_clust_k4
+
+
+# 9. export to excel
+
+
+write.xlsx(sum_clust_k3, file="cluster_Abbrecher02.xlsx",
+           sheetName="k3")
+write.xlsx(sum_clust_k4, file="cluster_Abbrecher01.xlsx",
+           sheetName="k4", append = TRUE)
+
